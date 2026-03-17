@@ -1,0 +1,29 @@
+{
+  "id": "ignore-pattern",
+  "description": "Ignore patterns exclude lockfile-only changes.",
+  "config": {
+    "provider": "google-vertex",
+    "modelId": "gemini-2.5-flash",
+    "temperature": 0,
+    "reasoning": "low",
+    "maxFiles": 5,
+    "ignorePatterns": ["bun.lock"]
+  },
+  "changedFiles": [
+    {
+      "filename": "bun.lock",
+      "status": "modified",
+      "additions": 1,
+      "deletions": 1,
+      "changes": 2,
+      "patch": "@@ -1,3 +1,3 @@\n-  \"name\": \"copilot-for-github\",\n+  \"name\": \"copilot-for-github\",\n"
+    }
+  ],
+  "expected": {
+    "summaryContains": [
+      "## Review Summary",
+      "Reviewed by copilot-for-github"
+    ],
+    "maxInlineComments": 0
+  }
+}

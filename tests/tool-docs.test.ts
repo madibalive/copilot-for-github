@@ -1,0 +1,158 @@
+import { test, expect } from "bun:test";
+import fs from "node:fs";
+import path from "node:path";
+import { TOOL_CATEGORY_BY_NAME } from "../src/tools/categories.ts";
+import { buildSystemPrompt } from "../src/prompts/review.ts";
+import { runCommand } from "../src/commands/command-runner.ts";
+import type { ReviewConfig, ReviewContext, PullRequestInfo, ChangedFile, CommandDefinition } from "../src/types.ts";
+
+function readmeToolInventory(): Set<string> {
+  const readmePath = path.join(process.cwd(), "README.md");
+  const text = fs.readFileSync(readmePath, "utf8");
+  const toolsSection = text.split("## Tools")[1];
+  if (!toolsSection) {
+    throw new Error("README Tools section not found");
+  }
+  const section = toolsSection.split("\n## ")[0] ?? "";
+  const tools = new Set<string>();
+  for (const line of section.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("- ")) continue;
+    const matches = [...trimmed.matchAll(/`([^`]+)`/g)].map((match) => match[1]);
+    for (const token of matches) {
+      if (token.includes(".")) continue; // skip category names like git.history
+      tools.add(token);
+    }
+  }
+  return tools;
+}
+
+test("README tools inventory includes all tool names", () => {
+  const listed = readmeToolInventory();
+  const tools = Object.keys(TOOL_CATEGORY_BY_NAME);
+  for (const tool of tools) {
+    expect(listed.has(tool)).toBe(true);
+  }
+});
+
+test("thread classification step requires follow-up context", () => {
+  // Thread tools WITHOUT get_review_context → no dangling "classification above" reference
+  const withoutContext = buildSystemPrompt(["list_threads_for_location", "update_comment", "resolve_thread"]);
+  expect(withoutContext).not.toContain("classification above");
+  expect(withoutContext).not.toContain("Follow-up Reviews");
+
+  // Thread tools WITH get_review_context → classification table + workflow step
+  const withContext = buildSystemPrompt(["get_review_context", "list_threads_for_location", "update_comment", "resolve_thread"]);
+  expect(withContext).toContain("classification above");
+  expect(withContext).toContain("Follow-up Reviews");
+  expect(withContext).toContain("RESOLVED");
+  expect(withContext).toContain("resolve_thread");
+  expect(withContext).toContain("issueCommentReplies");
+  expect(withContext).toContain("HUMAN REPLIED (PR COMMENT)");
+
+  // Follow-up context WITHOUT resolve_thread → fallback action in RESOLVED row
+  const withoutResolve = buildSystemPrompt(["get_review_context"]);
+  expect(withoutResolve).toContain("Follow-up Reviews");
+  expect(withoutResolve).toContain("RESOLVED");
+  expect(withoutResolve).not.toContain("resolve_thread");
+  expect(withoutResolve).toContain("Resolved Since Last Review");
+});
+
+test("system prompts only mention available tools", async () => {
+  expect(buildSystemPrompt(["git"])).toContain("**git**:");
+  expect(buildSystemPrompt([])).not.toContain("**git**:");
+  expect(buildSystemPrompt(["post_summary"])).toContain("post_summary");
+  expect(buildSystemPrompt([])).not.toContain("post_summary");
+  expect(buildSystemPrompt([])).toContain("Never post a no-op suggestion block");
+  expect(buildSystemPrompt([])).toContain("No jokes, metaphors, or filler");
+  expect(buildSystemPrompt([])).not.toContain("farm-animal reference");
+
+  const baseConfig: ReviewConfig = {
+    provider: "google",
+    apiKey: "test",
+    modelId: "model",
+    maxFiles: 10,
+    ignorePatterns: [],
+    repoRoot: process.cwd(),
+    debug: false,
+    reasoning: "off",
+  };
+  const baseContext: ReviewContext = { owner: "o", repo: "r", prNumber: 1 };
+  const basePrInfo: PullRequestInfo = {
+    number: 1,
+    title: "PR",
+    body: "",
+    author: "author",
+    baseRef: "main",
+    headRef: "feature",
+    baseSha: "base",
+    headSha: "head",
+    url: "https://example.com/pr/1",
+  };
+  const baseFiles: ChangedFile[] = [
+    { filename: "src/a.ts", status: "modified", additions: 1, deletions: 1, changes: 2, patch: "@@ -1 +1 @@\n-const a=1;\n+const a=2;\n" },
+  ];
+  const command: CommandDefinition = { id: "security", prompt: "Check" };
+
+  let capturedPrompt = "";
+  await runCommand({
+    mode: "pr",
+    command,
+    config: baseConfig,
+    context: baseContext,
+    octokit: {} as any,
+    prInfo: basePrInfo,
+    changedFiles: baseFiles,
+    existingComments: [],
+    reviewThreads: [],
+    commentType: "issue",
+    allowlist: ["filesystem", "git.history", "github.pr.feedback"],
+    overrides: {
+      model: { contextWindow: 1000 } as any,
+      compactionModel: null,
+      agentFactory: ({ initialState }: any) => {
+        capturedPrompt = initialState.systemPrompt;
+        return {
+          state: { error: null, messages: [] },
+          subscribe() {},
+          async prompt() {},
+          abort() {},
+        };
+      },
+    },
+  });
+
+  expect(capturedPrompt).toContain("Git tool schema:");
+  expect(capturedPrompt).toContain("post_summary");
+
+  let capturedPromptNoGit = "";
+  await runCommand({
+    mode: "pr",
+    command,
+    config: baseConfig,
+    context: baseContext,
+    octokit: {} as any,
+    prInfo: basePrInfo,
+    changedFiles: baseFiles,
+    existingComments: [],
+    reviewThreads: [],
+    commentType: "issue",
+    allowlist: ["filesystem"],
+    overrides: {
+      model: { contextWindow: 1000 } as any,
+      compactionModel: null,
+      agentFactory: ({ initialState }: any) => {
+        capturedPromptNoGit = initialState.systemPrompt;
+        return {
+          state: { error: null, messages: [] },
+          subscribe() {},
+          async prompt() {},
+          abort() {},
+        };
+      },
+    },
+  });
+
+  expect(capturedPromptNoGit).not.toContain("Git tool schema:");
+  expect(capturedPromptNoGit).not.toContain("post_summary");
+});

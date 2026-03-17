@@ -1,0 +1,28 @@
+{
+  "id": "schedule-pr",
+  "description": "Agent makes repo changes in schedule mode and opens a PR.",
+  "mode": "schedule",
+  "config": {
+    "provider": "google-vertex",
+    "modelId": "gemini-2.5-flash",
+    "temperature": 0,
+    "reasoning": "low",
+    "maxFiles": 5
+  },
+  "changedFiles": [],
+  "schedule": {
+    "commandPrompt": "You are running in schedule mode. Use the write_file tool (not apply_patch) to:\n1) Create docs/auto.md with a short paragraph about automated updates.\n2) Overwrite docs/seed.md with exactly two lines: 'seed' and 'Automated update applied.'.\nAfter writing files, run git config user.name \"copilot-for-github\" and git config user.email \"copilot-for-github@users.noreply.github.com\", then git add docs/auto.md docs/seed.md, git commit -m \"Scheduled docs update\", then call push_pr with title \"Scheduled docs update\" and body \"Automated docs update from scheduled run.\".\nDo not modify any other files. Do not respond with prose; only use tools until everything is complete.",
+    "writeScope": {
+      "include": ["docs/**"]
+    },
+    "seedFiles": {
+      "docs/seed.md": "seed\n"
+    }
+  },
+  "expected": {
+    "prCreated": true,
+    "changedFilesInclude": ["docs/auto.md", "docs/seed.md"],
+    "llmChanges": true,
+    "toolCallsInclude": ["write_file", "git", "push_pr"]
+  }
+}

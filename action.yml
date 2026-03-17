@@ -1,0 +1,109 @@
+name: "copilot-for-github"
+description: "Agent-driven PR reviewer using LLMs"
+author: "copilot-for-github"
+inputs:
+  provider:
+    description: "LLM provider (openrouter, gemini, anthropic, openai, etc.). Aliases: gemini→google, vertex→google-vertex."
+    required: false
+  api-key:
+    description: "API key for the LLM provider (required for non-Vertex providers; optional for Vertex AI)"
+    required: false
+  model:
+    description: "Model to use (e.g., anthropic/claude-sonnet-4)"
+    required: false
+  compaction-model:
+    description: "Optional model to use for context compaction summaries (defaults to gemini-3-flash-preview for Google, else same as model)"
+    required: false
+  max-files:
+    description: "Max files to review (skips if exceeded)"
+    required: false
+  ignore-patterns:
+    description: "Comma-separated glob patterns to skip"
+    required: false
+  debug:
+    description: "Enable debug logging"
+    required: false
+  reasoning:
+    description: "Thinking level (off, minimal, low, medium, high, xhigh)"
+    required: false
+  temperature:
+    description: "Sampling temperature (0-2). Gemini 3 defaults to 1.0 and may behave unexpectedly at lower values."
+    required: false
+  allow-pr-tools:
+    description: "Allow PR-creation tools in PR review mode (default false; always allowed in schedule mode)."
+    required: false
+  experimental-pr-explainer:
+    description: "Experimental: post a PR review guide comment and one explainer comment per changed file."
+    required: false
+  skip-automatic:
+    description: "Skip review when triggered automatically by a PR open/push event. Default false."
+    required: false
+  trigger-on-updates:
+    description: "Review PRs when new commits are pushed (synchronize event). Default true."
+    required: false
+  include-authors:
+    description: "Comma-separated PR author usernames to review. Empty means all."
+    required: false
+  exclude-authors:
+    description: "Comma-separated PR author usernames to skip (e.g. dependabot[bot],renovate[bot])."
+    required: false
+  exclude-bots:
+    description: "Automatically skip PRs from well-known bots (dependabot[bot], renovate[bot], github-actions[bot]). Default true. Set false to review bot PRs."
+    required: false
+  learning:
+    description: "Enable learning from 👍/👎 reactions on review comments. Stores preferences in .github/copilot-learned.json. Default true."
+    required: false
+  context-file:
+    description: "Path (relative to repo root) to a markdown file injected as '## Team Context' in the system prompt. Default: .github/copilot-context.md"
+    required: false
+  use-dora:
+    description: "Enable dora code-intelligence tools (call-graph queries via SCIP index). Default false."
+    required: false
+  dora-version:
+    description: "Version of the dora CLI to use. Default latest."
+    required: false
+  dora-pre-index:
+    description: "Path to a pre-built dora index directory."
+    required: false
+  skip-keywords:
+    description: "Comma-separated keywords; skip review if PR title or body contains any (case-insensitive)."
+    required: false
+  include-keywords:
+    description: "Comma-separated keywords; only review if PR title or body contains at least one (case-insensitive)."
+    required: false
+  include-base-branches:
+    description: "Comma-separated glob patterns for base (target) branch. Matches GitHub workflow branch filter convention."
+    required: false
+  exclude-base-branches:
+    description: "Comma-separated glob patterns to skip if base branch matches."
+    required: false
+  include-head-branches:
+    description: "Comma-separated glob patterns for head (source) branch."
+    required: false
+  exclude-head-branches:
+    description: "Comma-separated glob patterns to skip if head branch matches."
+    required: false
+  include-labels:
+    description: "Comma-separated label names; only review PRs that have at least one of these labels."
+    required: false
+  exclude-labels:
+    description: "Comma-separated label names; skip review if the PR has any of these labels."
+    required: false
+  bot-name:
+    description: "Bot/app mention name for @bot command triggers (e.g., my-app)."
+    required: false
+  app-id:
+    description: "GitHub App ID (optional; default uses implicit GITHUB_TOKEN)"
+    required: false
+  app-installation-id:
+    description: "GitHub App installation ID"
+    required: false
+  app-private-key:
+    description: "GitHub App private key PEM"
+    required: false
+runs:
+  using: "docker"
+  image: "Dockerfile"
+branding:
+  icon: "check"
+  color: "gray-dark"

@@ -1,0 +1,422 @@
+# Copilot for GitHub
+
+
+A GitHub Action that reviews PRs using an LLM-powered agent with repo tooling.
+
+## Usage
+
+```yaml
+name: PR Review
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ghcr.io/yourname/copilot-for-github:latest
+        with:
+          provider: openrouter
+          api-key: ${{ secrets.OPENROUTER_KEY }}
+          model: anthropic/claude-sonnet-4
+```
+
+## Inputs
+
+- `provider` (required unless set in `.reviewerc`): LLM provider supported by `@mariozechner/pi-ai` (e.g., google, anthropic, openai, openrouter). Aliases: `gemini` → `google`, `vertex`/`vertex-ai` → `google-vertex`.
+- `api-key` (required unless using Vertex AI): API key for the provider. For Vertex AI, api-key is optional (ADC or key). When using ADC, set `GOOGLE_CLOUD_PROJECT` (or `GCLOUD_PROJECT`) and `GOOGLE_CLOUD_LOCATION`. For the Gemini API provider (`google`), use `GEMINI_API_KEY` locally/CI.
+- `model` (required unless set in `.reviewerc`): Model name
+- `compaction-model` (optional): Model used for context compaction summaries. Defaults to `gemini-3-flash-preview` when provider is `google`, otherwise uses `model`.
+- `max-files` (optional, default `50`): Max files to review; skips if exceeded. Also configurable via `.reviewerc` `review.defaults.maxFiles`.
+- `ignore-patterns` (optional, default `*.lock,*.generated.*`): Comma-separated globs to skip
+- `reasoning` (optional, default `off`): Thinking level (`off|minimal|low|medium|high|xhigh`)
+- `temperature` (optional): Sampling temperature (0-2)
+- `allow-pr-tools` (optional): Allow PR-creation tools in PR review mode (default false; schedule mode always allows them)
+- `experimental-pr-explainer` (optional): Experimental toggle to post a PR-level review guide comment plus selective per-file explainer comments
+- `bot-name` (optional): Bot/app mention name for `@bot command` triggers (e.g., `my-app`)
+- `app-id` (optional): GitHub App ID (use instead of GITHUB_TOKEN)
+- `app-installation-id` (optional): GitHub App installation ID
+- `app-private-key` (optional): GitHub App private key PEM
+
+### Trigger controls
+
+- `skip-automatic` (optional, default `false`): Skip review when triggered automatically by a PR open/push event. Manual `@bot` command triggers still work. Also configurable via `.reviewerc` `review.defaults.skipAutomatic`.
+- `trigger-on-updates` (optional, default `true`): When `false`, skips reviews triggered by new commits pushed to an existing PR (`synchronize` event); only reviews on PR open. Also configurable via `.reviewerc` `review.defaults.triggerOnUpdates`.
+
+### Team context file
+
+- `context-file` (optional, default `.github/copilot-context.md`): Path (relative to repo root) to a markdown file injected verbatim as a `## Team Context` block in the system prompt. Use it to document team conventions, patterns to focus on, things to avoid, architectural decisions, etc. — analogous to how `CLAUDE.md` works in Claude Code. The file is read on every review run; no extra permissions needed. Also configurable via `.reviewerc` `review.defaults.contextFile`.
+
+Example `.github/copilot-context.md`:
+```markdown
+We use Result types instead of throwing exceptions. Flag any new throw statements.
+Avoid adding abstraction layers for single call-sites.
+Auth changes always need a second pair of eyes — escalate with a high-confidence finding.
+```
+
+### Learning from reactions
+
+- `learning` (optional, default `true`): Enable learning from 👍/👎 reactions on review comments. When enabled, the agent reads accumulated reaction signals and adjusts its behavior — suppressing comment patterns the team has repeatedly 👎'd and amplifying patterns the team has 👍'd. Preferences are stored in `.github/copilot-learned.json` and committed back to the default branch after each review (requires `repo.write` in the tools allowlist and `contents: write` permission). Also configurable via `.reviewerc` `review.defaults.learning`.
+
+To use learning with the default tools allowlist (which includes `repo.write`), add `contents: write` to your workflow permissions:
+
+```yaml
+permissions:
+  contents: write
+  pull-requests: write
+```
+
+If `repo.write` is not in the allowlist, learning still influences the current review (reactions are read and injected into the prompt) but preferences are not persisted.
+
+### dora code intelligence
+
+- `use-dora` (optional, default `false`): Enable dora code-intelligence tools backed by a SCIP index. When enabled, the agent gains structured tools for call-graph queries: symbol lookup, reference finding, dependency tracing, code smell detection, and cycle detection.
+- `dora-version` (optional, default `latest`): Version of the dora CLI to install.
+- `dora-pre-index` (optional): Path to a pre-built dora index directory (skips the index build step).
+
+Also configurable via `.reviewerc`:
+```yaml
+review:
+  defaults:
+    dora:
+      enabled: true
+      version: "0.4.2"
+```
+
+### PR filters
+
+When a PR is filtered out, a brief "Skipped" summary comment is posted explaining the reason.
+
+- `exclude-bots` (optional, default `true`): Automatically skip PRs from well-known bots (`dependabot[bot]`, `renovate[bot]`, `github-actions[bot]`). Set `false` to review bot PRs. Also configurable via `.reviewerc` `review.defaults.excludeBots`. Has no effect when `include-authors` is set.
+- `include-authors` (optional): Comma-separated list of PR authors to review. PRs from authors not in this list are skipped.
+- `exclude-authors` (optional): Comma-separated list of additional PR authors to skip. Merged with the default bot list when `exclude-bots` is `true`.
+- `skip-keywords` (optional): Comma-separated keywords; PRs whose title or body contains any of these are skipped (case-insensitive).
+- `include-keywords` (optional): Comma-separated keywords; only PRs whose title or body contains at least one are reviewed.
+- `include-base-branches` (optional): Comma-separated glob patterns for the target (base) branch. Matches GitHub workflow `branches:` convention. Only PRs targeting matching branches are reviewed.
+- `exclude-base-branches` (optional): Comma-separated glob patterns; PRs targeting matching base branches are skipped.
+- `include-head-branches` (optional): Comma-separated glob patterns for the source (head) branch. Only PRs from matching branches are reviewed.
+- `exclude-head-branches` (optional): Comma-separated glob patterns; PRs from matching head branches are skipped.
+- `include-labels` (optional): Comma-separated label names; only PRs with at least one matching label are reviewed.
+- `exclude-labels` (optional): Comma-separated label names; PRs with any of these labels are skipped (e.g., `wip,do-not-review`).
+
+## .reviewerc configuration
+
+Place a `.reviewerc` file at the repo root to define custom commands and scheduled runs. Action inputs override `.reviewerc` values; `.reviewerc` overrides built-in defaults.
+
+Example:
+```yaml
+version: 1
+commands:
+  - id: security
+    prompt: "Review for authz bypass, unsafe deserialization, secrets, and input validation gaps."
+review:
+  defaults:
+    provider: openrouter
+    model: anthropic/claude-sonnet-4
+    maxFiles: 30
+    skipAutomatic: false
+    triggerOnUpdates: true
+    excludeBots: true   # default; skips dependabot[bot], renovate[bot], github-actions[bot]
+    learning: true      # learn from 👍/👎 reactions; requires repo.write + contents: write
+    contextFile: .github/copilot-context.md  # optional; default path shown
+  run: [security]
+  keywordFilters:
+    skipKeywords: [WIP, do-not-review]
+  baseBranchFilters:
+    include: [main, release/*]
+  headBranchFilters:
+    exclude: [chore/*, docs/*]
+  labelFilters:
+    exclude: [wip]
+```
+
+See `docs/reviewerc.example.yml` for a full example and `schemas/reviewerc.schema.json` for the full schema.
+Use `review.allowPrToolsInReview: true` to enable PR-creation tools in PR review mode.
+Use `review.experimental.prExplainer: true` to enable the experimental PR explainer (review guide + selective per-file explainer comments).
+
+All filter fields (`authorFilters`, `keywordFilters`, `baseBranchFilters`, `headBranchFilters`, `labelFilters`) support `include` and `exclude` arrays. Action inputs take precedence over `.reviewerc` values.
+
+### Built-in commands
+
+The following commands are built-in and available without any `.reviewerc` configuration (requires `bot-name` to be set for `@mention` triggering):
+
+| Command | Trigger | Description |
+|---------|---------|-------------|
+| `explain` | `@bot explain [focus area]` | Explains the PR code changes in plain English. Optionally scope to a file, function, or area by passing it as an argument. Posts as an issue comment. |
+
+Built-in commands can be overridden by defining a command with the same `id` in `.reviewerc`.
+
+### Experimental PR explainer
+
+Enable via action input:
+
+```yaml
+- uses: ghcr.io/madibalive/copilot-for-github:latest
+  with:
+    provider: google
+    api-key: ${{ secrets.GEMINI_API_KEY }}
+    model: gemini-3-pro-preview
+    experimental-pr-explainer: true
+```
+
+Enable via `.reviewerc`:
+
+```yaml
+version: 1
+review:
+  experimental:
+    prExplainer: true
+```
+
+Behavior when enabled:
+- Posts one PR-level "Review Guide" issue comment.
+- Posts selective explainer comments for meaningful changed files (inline when possible, issue-comment fallback for non-commentable/binary/large diffs).
+- Disables the legacy auto-generated summary sequence diagram.
+- For larger PRs (>3 distinct non-test/non-generated directories), the review guide must include both:
+  - a Mermaid component relationship diagram
+  - a Mermaid sequence diagram
+- Required diagrams are validated with Mermaid's parser before posting.
+- Skips generated/noise artifact files (for example lock/log/minified/map/snapshot/coverage artifacts) from per-file explainer comments.
+- Allows partial explainer output; unknown file paths are ignored instead of failing the whole explainer run.
+- If required diagrams are missing/invalid, or output is missing/not parseable JSON, posts an explicit failure signal comment.
+- Mermaid snippets can be checked with the `validate_mermaid` tool (parser-backed via Mermaid's parser).
+
+### Add reviewer-latest to CI
+
+If you want CI to run the reviewer with this repository's patched dependencies (for example patched `@mariozechner/pi-ai`) on internal PRs, add a non-blocking job like this:
+
+```yaml
+reviewer-latest:
+  if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false }}
+  needs: [test, harness]
+  runs-on: ubuntu-latest
+  permissions:
+    contents: read
+    pull-requests: write
+  continue-on-error: true
+  env:
+    VERTEX_AI_API_KEY: ${{ secrets.VERTEX_AI_API_KEY }}
+  steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    - uses: oven-sh/setup-bun@v1
+      if: ${{ env.VERTEX_AI_API_KEY != '' }}
+      with:
+        bun-version: "1.3.9"
+    - name: Skip reviewer when VERTEX_AI_API_KEY is missing
+      if: ${{ env.VERTEX_AI_API_KEY == '' }}
+      run: echo "Skipping reviewer-latest (VERTEX_AI_API_KEY not configured)."
+    - name: Install dependencies (apply local patches)
+      if: ${{ env.VERTEX_AI_API_KEY != '' }}
+      run: bun install --frozen-lockfile
+    - name: Verify pi-ai patch is active
+      if: ${{ env.VERTEX_AI_API_KEY != '' }}
+      run: grep -n "VERTEX_AI_API_KEY" node_modules/@mariozechner/pi-ai/dist/providers/google-vertex.js
+    - name: Run reviewer from source (patched dependencies)
+      if: ${{ env.VERTEX_AI_API_KEY != '' }}
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        env \
+          GITHUB_TOKEN="${GITHUB_TOKEN}" \
+          INPUT_PROVIDER=google-vertex \
+          INPUT_MODEL=gemini-3-flash-preview \
+          INPUT_REASONING=minimal \
+          INPUT_DEBUG=true \
+          LLM_RATE_LIMIT_MAX_WAIT_MS=3600000 \
+          LLM_RATE_LIMIT_MAX_ATTEMPTS=20 \
+          "INPUT_API-KEY=${VERTEX_AI_API_KEY}" \
+          bun src/index.ts
+```
+
+Notes:
+- Secrets cannot be used directly in job-level `if`; gate at step level with an env variable instead.
+- This path is intended for this repo's CI, so local dependency patches in `patches/` are applied via `postinstall`.
+
+## Tools
+
+Tools are grouped by allowlist categories. Commands can further restrict via `tools.allow`.
+
+- `agent.subagent` (in-process delegation): `subagent`
+- `terminate` (run control; always available, not allowlist-gated)
+- `filesystem` (read-only): `read`, `grep`, `find`, `ls`, `validate_mermaid`
+- `git.read` (PR diffs): `get_changed_files`, `get_full_changed_files`, `get_diff`, `get_full_diff`
+- `git.history` (repo history): `git_log`, `git_diff_range`, `git` (read-only in PR mode; write-enabled in scheduled runs with restrictions)
+- `github.pr.read` (PR metadata + context): `get_pr_info`, `get_review_context`, `list_threads_for_location`, `web_search` (Gemini/Google/Vertex only; Vertex requires `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION`)
+- `github.pr.feedback` (PR feedback): `comment`, `suggest`, `update_comment`, `reply_comment`, `resolve_thread`, `report_finding`, `set_summary_mode`, `post_summary`
+- `github.pr.manage` (PR creation): `push_pr` (schedule mode always; PR mode only if `allow-pr-tools` is true)
+- `github.reactions.read` (reaction signals): reads 👍/👎 reactions on bot review comments for learning. Used internally; not surfaced to the agent as a callable tool.
+- `repo.write` (file edits): `write_file`, `apply_patch`, `delete_file`, `mkdir`. Also required for persisting learned preferences to `.github/copilot-learned.json`.
+- `code.graph` (SCIP code intelligence, opt-in via `use-dora: true`): `dora_symbol`, `dora_refs`, `dora_deps`, `dora_rdeps`, `dora_smells`, `dora_cycles`
+- `terminate` is always available and should be called exactly once as the final action.
+
+Note: scheduled runs do not have PR context; PR-only tools (`git.read`, `github.pr.read`, `github.pr.feedback`) are not available there.
+
+
+### Scheduled maintenance example
+
+`.reviewerc`:
+```yaml
+version: 1
+
+commands:
+  - id: docs-drift
+    title: "Docs drift check"
+    prompt: |
+      Detect outdated documentation based on recent code changes (last 7 days).
+      Use git history to identify behavior changes and update README.md and docs accordingly.
+      If changes should be reviewed, use git add <paths>, git commit -m <message>, then open a PR with push_pr.
+    tools:
+      allow: [filesystem, git.history, repo.write, github.pr.manage]
+
+schedule:
+  enabled: true
+  runs:
+    nightly-docs: [docs-drift]
+  limits:
+    maxFiles: 50
+    maxDiffLines: 800
+  conditions:
+    paths:
+      include: ["README.md", "docs/**"]
+  writeScope:
+    include: ["README.md", "docs/**"]
+
+tools:
+  allowlist: [agent.subagent, filesystem, git.read, git.history, github.pr.read, github.pr.feedback, github.pr.manage, repo.write]
+```
+
+Workflow (weekly, Monday 08:00 Stockholm time / 07:00 UTC):
+```yaml
+name: Reviewer Maintenance
+
+on:
+  schedule:
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+    inputs:
+      run_docs:
+        description: "Run docs drift job"
+        type: boolean
+        required: false
+        default: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  docs-upkeep:
+    if: ${{ github.event_name == 'schedule' || inputs.run_docs }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: ghcr.io/madibalive/copilot-for-github:latest
+        with:
+          provider: vertex-ai
+          model: gemini-3-pro-preview
+        env:
+          GOOGLE_CLOUD_PROJECT: ${{ secrets.GOOGLE_CLOUD_PROJECT }}
+          GOOGLE_CLOUD_LOCATION: ${{ secrets.GOOGLE_CLOUD_LOCATION }}
+```
+
+## Notes
+
+- Requires `actions/checkout` so files are available locally.
+- Uses the implicit `GITHUB_TOKEN` for PR metadata and comments (no extra setup required).
+- Docker runtime uses Bun to execute the TypeScript sources directly (no committed `dist/` artifacts).
+- For PRs touching more than 3 distinct directories, the summary includes a Mermaid sequence diagram in a collapsible `<details>` block.
+- When `experimental-pr-explainer` (or `review.experimental.prExplainer`) is enabled, the agent also posts:
+  - one PR-level "Review Guide" comment
+  - for larger PRs (>3 distinct non-test/non-generated directories), the review guide includes both a Mermaid component relationship diagram and a Mermaid sequence diagram
+  - selective explainer comments for meaningful changed files (inline when possible, issue-comment fallback for non-commentable/binary/large diffs)
+  - the legacy auto-generated summary sequence diagram is disabled
+- Summary output suppresses empty sections/tables to reduce noise. Sparse findings are grouped by category without forcing a full counts table.
+- Follow-up reviews keep the summary delta-focused on new changes; unchanged prior findings are not repeated. Follow-up summaries split findings into "New Issues Since Last Review" and "Resolved Since Last Review".
+- Summary rendering is deterministic: the agent reports structured findings (category/severity/status), and tooling renders compact/standard/alert formats to reduce noise.
+- For large reviews, the agent may prune earlier context and inject a short context summary to stay within model limits.
+- LLM calls automatically retry with exponential backoff on rate limits (including 429/RESOURCE_EXHAUSTED), respecting Retry-After when present and waiting up to ~60 minutes total by default. Override via `LLM_RATE_LIMIT_MAX_WAIT_MS` and `LLM_RATE_LIMIT_MAX_ATTEMPTS`.
+- Comment-triggered commands use `!command` or `@bot command` in PR comments (requires `issue_comment` workflow).
+- Scheduled runs read `schedule.runs[GITHUB_JOB]` from `.reviewerc`. The agent should use `git add` + `git commit`, then `push_pr` to open or update a PR.
+- Manual `workflow_dispatch` runs use the same schedule flow and `schedule.runs[GITHUB_JOB]` mapping.
+- Scheduled PR descriptions include the model + billing footer when the agent calls `push_pr`.
+
+Minimal workflow (implicit token):
+
+```yaml
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ghcr.io/madibalive/copilot-for-github:latest
+        with:
+          provider: google
+          api-key: ${{ secrets.GEMINI_API_KEY }}
+          model: gemini-3-pro-preview
+          reasoning: medium
+```
+
+## Gemini 3 Pro Recommendations
+
+Prompts are optimized for Gemini 3 Pro. Recommendations:
+
+- **Temperature**: Leave at default (1.0). Lower values may cause looping or degraded behavior.
+- **Reasoning**: Use `medium` or higher for complex PRs. Gemini 3 maps `off/minimal/low` → `low` and `medium/high/xhigh` → `high` internally.
+
+```yaml
+- uses: ghcr.io/madibalive/copilot-for-github:latest
+  with:
+    provider: google
+    api-key: ${{ secrets.GEMINI_API_KEY }}
+    model: gemini-3-pro-preview
+    reasoning: medium  # recommended for thorough reviews
+```
+
+## Reasoning & temperature
+
+```yaml
+- uses: ghcr.io/madibalive/copilot-for-github:latest
+  with:
+    provider: google
+    api-key: ${{ secrets.GEMINI_API_KEY }}
+    model: gemini-3-pro-preview
+    reasoning: medium
+```
+
+## GitHub App auth (optional)
+
+By default, the action uses the implicit `GITHUB_TOKEN`. If you want to authenticate as a GitHub App instead, **create your own GitHub App** and use *your* App ID, Installation ID, and private key.
+
+```yaml
+- uses: ghcr.io/yourname/copilot-for-github:latest
+  with:
+    provider: google
+    api-key: ${{ secrets.GEMINI_API_KEY }}
+    model: gemini-3-pro-preview
+    app-id: ${{ secrets.MY_APP_ID }}
+    app-installation-id: ${{ secrets.MY_APP_INSTALLATION_ID }}
+    app-private-key: ${{ secrets.MY_APP_PRIVATE_KEY }}
+```
+
+
+## Local smoke run
+
+Requires `bun` installed locally.
+
+```bash
+bun run smoke --provider openrouter --api-key "$OPENROUTER_KEY" --model anthropic/claude-sonnet-4 --repo owner/name --pr 123 --token "$GITHUB_TOKEN" --reasoning low --temperature 0.2
+```
+
+## Release
+
+Push a tag like `v0.1.0` to build and publish the image to GHCR via `.github/workflows/release.yml`.

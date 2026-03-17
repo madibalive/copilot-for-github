@@ -1,0 +1,7 @@
+.copilot-app-private-key
+.env
+node_modules/
+package-lock.json
+dist/
+data/
+greptile-docs

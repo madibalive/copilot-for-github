@@ -1,0 +1,59 @@
+version: 1
+commands:
+  - id: security
+    title: "Security scan"
+    prompt: |
+      Review for authz bypass, unsafe deserialization, secrets, and input validation gaps.
+    tools:
+      allow: [filesystem, git.read, github.pr.read]
+    limits:
+      maxFiles: 200
+      maxFindings: 15
+    output:
+      format: findings
+      severityFloor: medium
+    comment:
+      type: issue
+
+  - id: docs-drift
+    title: "Docs drift check"
+    prompt: |
+      Compare README and docs against current code behavior for changes in the last 24 hours.
+      Use git history to identify recent changes and update docs if needed.
+      If you make changes that should be reviewed, use git add <paths>, git commit -m <message>, then open a PR with push_pr.
+    tools:
+      allow: [filesystem, git.history, repo.write, github.pr.manage]
+
+review:
+  defaults:
+    provider: openrouter
+    model: anthropic/claude-sonnet-4
+    reasoning: medium
+    temperature: 0.4
+    # Optional: path to a markdown file injected as ## Team Context in the system prompt.
+    # Default: .github/copilot-context.md (read silently if present, no error if absent)
+    contextFile: .github/copilot-context.md
+  run: [security]
+  experimental:
+    # Experimental PR explainer: one top-level review guide + one explainer comment per file.
+    # Equivalent action input: experimental-pr-explainer: true
+    prExplainer: true
+
+schedule:
+  enabled: true
+  runs:
+    nightly-docs: [docs-drift]
+  limits:
+    maxFiles: 50
+    maxDiffLines: 800
+  conditions:
+    paths:
+      include: ["README.md", "docs/**"]
+  writeScope:
+    include: ["README.md", "docs/**"]
+
+tools:
+  allowlist: [agent.subagent, filesystem, git.read, git.history, github.pr.read, github.pr.feedback, github.pr.manage, repo.write]
+
+output:
+  commentType: issue
