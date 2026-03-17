@@ -60,13 +60,16 @@ Auth changes always need a second pair of eyes — escalate with a high-confiden
 
 - `learning` (optional, default `true`): Enable learning from 👍/👎 reactions on review comments. When enabled, the agent reads accumulated reaction signals and adjusts its behavior — suppressing comment patterns the team has repeatedly 👎'd and amplifying patterns the team has 👍'd. Preferences are stored in `.github/copilot-learned.json` and committed back to the default branch after each review (requires `repo.write` in the tools allowlist and `contents: write` permission). Also configurable via `.reviewerc` `review.defaults.learning`.
 
-To use learning with the default tools allowlist (which includes `repo.write`), add `contents: write` to your workflow permissions:
+To use learning with the default tools allowlist (which includes `repo.write`), add `contents: write` and `issues: read` to your workflow permissions:
 
 ```yaml
 permissions:
-  contents: write
+  contents: write    # to commit .github/copilot-learned.json
   pull-requests: write
+  issues: read       # to read 👍/👎 reactions on bot comments
 ```
+
+If `issues: read` is missing, the action will log a warning and continue — but reactions won't be read and learning signals will be lost for that run.
 
 If `repo.write` is not in the allowlist, learning still influences the current review (reactions are read and injected into the prompt) but preferences are not persisted.
 
@@ -350,8 +353,9 @@ Minimal workflow (implicit token):
 
 ```yaml
 permissions:
-  contents: read
+  contents: write          # write = commit learned prefs; use read if learning: false
   pull-requests: write
+  issues: read             # required for reading 👍/👎 reactions (learning)
 
 jobs:
   review:

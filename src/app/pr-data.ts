@@ -319,12 +319,13 @@ const BOT_COMMENT_MARKER = "<!-- sri:bot-comment -->";
 export async function fetchReactionsForBotComments(
   octokit: ReturnType<typeof github.getOctokit>,
   context: ReviewContext,
-  comments: ExistingComment[]
+  comments: ExistingComment[],
+  logWarn: (msg: string) => void = console.warn
 ): Promise<ReactionSummary[]> {
   const botComments = comments.filter((c) => c.body.includes(BOT_COMMENT_MARKER));
   if (botComments.length === 0) return [];
 
-  const results = await Promise.all(
+  const results = await Promise.allSettled(
     botComments.map(async (comment): Promise<ReactionSummary> => {
       const { data } = await octokit.rest.reactions.listForIssueComment({
         owner: context.owner,
@@ -343,5 +344,13 @@ export async function fetchReactionsForBotComments(
     })
   );
 
-  return results;
+  const failed = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+  if (failed.length > 0) {
+    logWarn(
+      `[warn] Failed to fetch reactions for ${failed.length}/${botComments.length} bot comment(s) — learning signals may be incomplete. ` +
+      `Check that your token has the 'reactions:read' scope (or equivalent org permissions). Error: ${failed[0].reason}`
+    );
+  }
+
+  return results.filter((r): r is PromiseFulfilledResult<ReactionSummary> => r.status === "fulfilled").map((r) => r.value);
 }

@@ -109,7 +109,7 @@ export async function runActionFlow(params: {
 
   const { existingComments, reviewThreads } = await fetchExistingCommentsImpl(octokit, context);
   const fetchReactionsImpl = params.fetchReactionsForBotCommentsFn ?? fetchReactionsForBotComments;
-  const botCommentReactions = await fetchReactionsImpl(octokit, context, existingComments);
+  const botCommentReactions = await fetchReactionsImpl(octokit, context, existingComments, logInfo);
   const learnedPrefs = config.learning
     ? mergeReactionsIntoPrefs(loadLearnedPrefs(reviewConfig.repoRoot), botCommentReactions)
     : null;

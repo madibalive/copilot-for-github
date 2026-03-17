@@ -10,10 +10,15 @@ function indexExists(workingDir: string): boolean {
   return fs.existsSync(path.join(workingDir, DORA_INDEX_DIR));
 }
 
-function noIndexError(): { content: [{ type: "text"; text: string }] } {
+function noIndexError() {
   return {
-    content: [{ type: "text", text: "Error: dora index not found. Run `dora index` first to build the SCIP index in .dora/." }],
+    content: [{ type: "text" as const, text: "Error: dora index not found. Run `dora index` first to build the SCIP index in .dora/." }],
+    details: {},
   };
+}
+
+function ok(text: string) {
+  return { content: [{ type: "text" as const, text }], details: {} };
 }
 
 function run(workingDir: string, args: string[]): string {
@@ -36,7 +41,7 @@ export function createDoraTools(workingDir: string): AgentTool<any>[] {
     execute: async (_id, params) => {
       if (!indexExists(workingDir)) return noIndexError();
       const output = run(workingDir, ["symbol", params.symbol]);
-      return { content: [{ type: "text", text: output }] };
+      return ok(output);
     },
   };
 
@@ -48,7 +53,7 @@ export function createDoraTools(workingDir: string): AgentTool<any>[] {
     execute: async (_id, params) => {
       if (!indexExists(workingDir)) return noIndexError();
       const output = run(workingDir, ["refs", params.symbol]);
-      return { content: [{ type: "text", text: output }] };
+      return ok(output);
     },
   };
 
@@ -60,7 +65,7 @@ export function createDoraTools(workingDir: string): AgentTool<any>[] {
     execute: async (_id, params) => {
       if (!indexExists(workingDir)) return noIndexError();
       const output = run(workingDir, ["deps", params.symbol]);
-      return { content: [{ type: "text", text: output }] };
+      return ok(output);
     },
   };
 
@@ -72,7 +77,7 @@ export function createDoraTools(workingDir: string): AgentTool<any>[] {
     execute: async (_id, params) => {
       if (!indexExists(workingDir)) return noIndexError();
       const output = run(workingDir, ["rdeps", params.symbol]);
-      return { content: [{ type: "text", text: output }] };
+      return ok(output);
     },
   };
 
@@ -85,7 +90,7 @@ export function createDoraTools(workingDir: string): AgentTool<any>[] {
       if (!indexExists(workingDir)) return noIndexError();
       const args = params.path ? ["smells", params.path] : ["smells"];
       const output = run(workingDir, args);
-      return { content: [{ type: "text", text: output }] };
+      return ok(output);
     },
   };
 
@@ -98,7 +103,7 @@ export function createDoraTools(workingDir: string): AgentTool<any>[] {
       if (!indexExists(workingDir)) return noIndexError();
       const args = params.path ? ["cycles", params.path] : ["cycles"];
       const output = run(workingDir, args);
-      return { content: [{ type: "text", text: output }] };
+      return ok(output);
     },
   };
 
