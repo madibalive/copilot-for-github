@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { createHash } from "node:crypto";
 import { Type } from "@sinclair/typebox";
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { getOctokit } from "@actions/github";
@@ -46,6 +49,8 @@ interface ReviewToolDeps {
   summaryPosted?: () => boolean;
   commentType?: CommentType;
   summaryPolicy?: SummaryPolicy;
+  repoRoot?: string;
+  hashlinesEnabled?: boolean;
 }
 
 export function createReviewTools(deps: ReviewToolDeps): AgentTool<any>[] {
@@ -206,6 +211,23 @@ export function createReviewTools(deps: ReviewToolDeps): AgentTool<any>[] {
     description: "Post a GitHub suggestion block (single-hunk fix).",
     parameters: SuggestSchema,
     execute: async (_id, params) => {
+      if (deps.hashlinesEnabled && params.content_hash && deps.repoRoot) {
+        const filePath = path.resolve(deps.repoRoot, params.path);
+        try {
+          const raw = await fs.readFile(filePath, "utf8");
+          const lines = raw.split(/\r?\n/);
+          const lineContent = lines[params.line - 1] ?? "";
+          const actualHash = createHash("md5").update(lineContent).digest("hex").slice(0, 4);
+          if (actualHash !== params.content_hash) {
+            return {
+              content: [{ type: "text", text: `Hash mismatch at ${params.path}:${params.line} — expected ${params.content_hash}, got ${actualHash}. The file may have changed since you read it. Re-read the file before suggesting.` }],
+              details: { id: -1 },
+            };
+          }
+        } catch {
+          // If file can't be read, skip verification and proceed
+        }
+      }
       const side = params.side as "LEFT" | "RIGHT" | undefined;
       const body = ensureBotMarker(wrapSuggestion(params.suggestion, params.comment));
       if (params.thread_id) {
@@ -666,6 +688,7 @@ const SuggestSchema = Type.Object({
   allow_new_thread: Type.Optional(Type.Boolean({ description: "Set true to force a new thread even if one exists." })),
   comment: Type.Optional(Type.String({ description: "Optional comment before suggestion" })),
   suggestion: Type.String({ description: "Replacement code for suggestion block" }),
+  content_hash: Type.Optional(Type.String({ description: "4-char hex hash from hashline-annotated read for the target line; verified before posting to prevent wrong-line suggestions." })),
 });
 
 const ListThreadsSchema = Type.Object({

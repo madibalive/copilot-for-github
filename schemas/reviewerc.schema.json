@@ -193,7 +193,8 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "prExplainer": { "type": "boolean" }
+        "prExplainer": { "type": "boolean" },
+        "hashlinesEnabled": { "type": "boolean" }
       }
     },
     "commandDefinition": {

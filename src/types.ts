@@ -34,6 +34,7 @@ export interface ReviewConfig {
   temperature?: number;
   allowPrToolsInReview?: boolean;
   experimentalPrExplainer?: boolean;
+  hashlinesEnabled?: boolean;
   dora?: { enabled: boolean; version?: string; preIndex?: string };
   contextFile?: string;
 }
@@ -123,6 +124,7 @@ export interface ReviewercConfig {
     allowPrToolsInReview?: boolean;
     experimental?: {
       prExplainer?: boolean;
+      hashlinesEnabled?: boolean;
     };
     authorFilters?: IncludeExclude;
     keywordFilters?: KeywordFilters;

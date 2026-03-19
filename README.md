@@ -138,6 +138,7 @@ review:
 See `docs/reviewerc.example.yml` for a full example and `schemas/reviewerc.schema.json` for the full schema.
 Use `review.allowPrToolsInReview: true` to enable PR-creation tools in PR review mode.
 Use `review.experimental.prExplainer: true` to enable the experimental PR explainer (review guide + selective per-file explainer comments).
+Use `review.experimental.hashlinesEnabled: true` to annotate file reads with per-line content hashes (`lineNum:hash|content`), improving line-anchor accuracy for suggestions on weaker models.
 
 All filter fields (`authorFilters`, `keywordFilters`, `baseBranchFilters`, `headBranchFilters`, `labelFilters`) support `include` and `exclude` arrays. Action inputs take precedence over `.reviewerc` values.
 

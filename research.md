@@ -1,344 +1,178 @@
-# Research: Learning/Memory System & Cross-File Intelligence
+# Research: oh-my-pi / Harness Problem Feature Adoption
 
-> Phase 0 research consolidating findings from Greptile docs, pi-action-runner, dora, click, pi-memory, and pi-kysely.
-
----
-
-## 1. Greptile's Memory & Learning System
-
-### What they store persistently
-
-PostgreSQL + pgvector (embeddings). Key tables:
-- Repository metadata and summaries
-- Code embeddings for semantic search
-- **Per-comment-type metrics** (made, addressed, reactions, ignored)
-- Custom rules authored via dashboard
-- Team reaction history
-
-### Learning signals
-
-Only 👍 and 👎 train the system. Other reactions are neutral.
-
-```
-Comment Made → Team reacts?
-  👍 = positive signal, keep making this type of comment
-  👎 = negative signal, track ignore count
-  No reaction = neutral (lower weight over time)
-
-Suppression threshold: ignored 3+ times → suppress comment type
-  EXCEPTION: security vulns, memory leaks, null pointer exceptions are never suppressed
-```
-
-Context from replies matters: `@greptileai We avoid wildcard imports because they hide dependencies` is stored alongside the reaction.
-
-### Per-comment-type metrics structure
-
-```typescript
-const learningData = {
-  semicolonComments: { made: 10, addressed: 0, reactions: -3 },
-  securityComments: { made: 5, addressed: 5, reactions: +4 },
-};
-```
-
-### Auto-rule discovery timeline
-
-- Week 1–4: generic suggestions, baseline data collection
-- Week 5–8: custom patterns emerge from PR comment analysis
-- Week 9+: personalized, suppressed noise
-
-After ~10 PRs, Greptile suggests rules based on observed patterns.
-
-### Config file structure (`.greptile/config.json`)
-
-```json
-{
-  "strictness": 1,
-  "rules": [
-    { "id": "uid", "rule": "...", "scope": ["src/db/**"], "severity": "high", "enabled": true }
-  ],
-  "disabledRules": ["uid-to-disable"],
-  "customContext": { "rules": [], "files": [], "other": [] }
-}
-```
-
-Cascading config: walks from repo root to file directory, child overrides parent settings, child+parent rules combine.
+> Sources:
+> - https://blog.can.ac/2026/02/12/the-harness-problem/
+> - https://github.com/can1357/oh-my-pi
+> - Current codebase (src/tools/fs.ts, src/tools/review.ts, src/summary.ts, src/tools/subagent.ts)
 
 ---
 
-## 2. dora — SCIP-based Code Intelligence
+## Summary
 
-**Decision: High-value integration for cross-file analysis gap.**
+The harness problem blog post benchmarks 16 models across three edit tools (patch, string-replace, hashline) and shows that **edit tool design has as much impact on measured performance as model capability**. The weakest model gains jump from 6.7% → 68.3% success with hashline. oh-my-pi is a full coding agent that implements hashline plus many other advanced features.
 
-**Rationale:** dora converts a SCIP index into a queryable SQLite database. It turns call-graph questions from "grep across hundreds of files" into millisecond queries. The pi-action-runner already uses it — proving viability as a GitHub Action component.
+For this project (a GitHub Actions PR review agent), most oh-my-pi features are environment-inappropriate (LSP servers, browser, SSH, image generation) or already implemented (context compaction, web search, structured findings). Two features warrant adoption:
 
-**Alternatives considered:** Tree-sitter alone (no cross-file), LSP in CI (complex setup), sourcegraph (SaaS-only).
+1. **Hashline read annotations** — directly applicable to the `read` tool
+2. **TTSR (Time Traveling Streamed Rules)** — worth tracking, needs infrastructure support
 
-### What dora provides
+---
 
-```bash
-dora symbol AuthService       # find symbols by name
-dora refs validateToken       # all references across codebase
-dora deps src/auth/service.ts --depth 2   # what this file imports
-dora rdeps src/auth/service.ts            # what imports this file
-dora cycles                              # circular dependency detection
-dora coupling --threshold 5             # high symbol-sharing file pairs
-dora adventure src/a.ts src/b.ts        # shortest path between files
-dora smells src/auth/service.ts         # complexity, long functions, TODOs
+## Feature Analysis
+
+### 1. Hashline Read Annotations
+
+**Decision: ADOPT**
+
+**What it is:**
+Each line gets a short (2–3 char) content hash prepended when a file is read:
+```
+11:a3|function hello() {
+22:f1|  return "world";
+33:0e|}
 ```
 
-### Integration path
+Models reference the hash tag when editing/commenting instead of reproducing exact content. The runtime verifies the hash still matches before applying.
 
-1. Add dora install + `dora init && dora index` to the GitHub Action workflow (cached by commit SHA — free on warm runs)
-2. Expose dora CLI as a bash tool in the agent (or wrap as structured tools)
-3. Agent can now answer: "what calls this function?", "what breaks if I change this interface?"
+**Why it matters for this project:**
+- The agent reads files and then posts inline comments anchored to line numbers. If the file has local changes or CRLF differences, the anchor silently drifts.
+- The `suggest` tool posts GitHub suggestions anchored to `(path, line)`. A hash would let us detect stale anchors at post time: if the hash in the tool call doesn't match what we read from the blob, the suggestion is rejected before it's posted as a wrong-line edit.
+- Weaker / cheaper models (used for cost-sensitive repos) show the largest gains. The blog benchmarks Grok Code Fast at 6.7% → 68.3% — a review agent running on budget models would benefit similarly.
+- The current `read` tool outputs raw text with no per-line identity. Line numbers are only shown for partial reads. Hash-annotated output gives the model a stable coordinate system independent of surrounding context drift.
 
-**Caching strategy from pi-action-runner:**
+**Where to implement:**
+- [src/tools/fs.ts](src/tools/fs.ts) — `readTool.execute`: when hashlines are enabled globally, annotate each line with `lineNum:hash|content` before returning.
+- Hash function: CRC32 over the raw line bytes → 4-char hex. Fast, no external dep (`Bun.CryptoHasher`).
+- Toggle is **operator-controlled via `.reviewerc`** (see below), not a tool parameter. The model always gets annotated output when the feature is on; it doesn't opt in per call.
+- Add optional `content_hash` field to the `suggest` tool schema in [src/tools/review.ts](src/tools/review.ts). When the model passes a hash, the tool re-reads the target line before posting and rejects if the hash doesn't match. If absent, the suggestion posts without verification (graceful degradation).
+
+**Toggle via `.reviewerc`:**
 ```yaml
-- cache key: dora version + scip install command  → dora binary
-- cache key: commit SHA                           → .dora/ index (busted each commit)
+review:
+  experimental:
+    hashlinesEnabled: true
 ```
+This follows the existing `prExplainer` pattern in `ReviewercConfig.review.experimental`. When enabled:
+1. `createReadOnlyTools` receives a `hashlines: boolean` flag and annotates read output.
+2. The system prompt gains a short instruction: "File reads use `lineNum:hash|content` format. When posting suggestions, include the `content_hash` from the line you're targeting."
+3. No action input needed initially (experimental features live in `.reviewerc` only until stable).
+
+**Rationale:** Lowest-risk, highest-leverage change. The read tool is already the primary context-gathering tool. Hashes are additive to existing output format; no existing tests break. Verification catches stale suggestion anchors silently, reducing noise.
+
+**Alternatives considered:**
+- **Keep current approach:** Works for strong models on stable files; fails silently on CRLF/whitespace drift or when model miscounts lines.
+- **Full file SHA per read call:** Tells us if the file changed, not which line. Not granular enough for suggestion verification.
+- **Git blob SHA per line (git blame style):** Accurate but requires a `git blame` subprocess; much heavier and adds network round-trip in GitHub Actions.
+- **String-replace style:** Already how GitHub suggestions work (match content, not position). But the model needs to emit the exact original content, which is the exact failure mode the blog documents.
+
+**Open questions / NEEDS CLARIFICATION:**
+- What hash length to use? Blog uses 2–3 chars. Collision probability for a 400-line file with 4-hex-char hash: ~0.25% per line pair. Acceptable for verification but worth noting.
+- Should hashline mode be on by default or require opt-in via `action.yml` input? Default-on is simpler; opt-in lets users debug without the annotation noise.
+- Does the GitHub Suggestions API care about the original line content for validation? (If so, hashes provide a second layer of defense beyond GitHub's own matching.)
 
 ---
 
-## 3. click — SQLite Memory for pi Agents
+### 2. Time Traveling Streamed Rules (TTSR)
 
-**Decision: Best reference for the learning/memory data model.**
+**Decision: TRACK — do not adopt now, revisit when agent framework supports streaming injection**
 
-**Rationale:** click is purpose-built for persisting AI agent memories across sessions with FTS5 search and scope-aware injection. Its schema maps directly to what we need. It uses Node's built-in `node:sqlite` (no external dep) + WAL mode.
+**What it is:**
+Rules/instructions in the system prompt have zero upfront token cost. They "activate" (are injected into context) only when the model's streamed output matches a trigger pattern. For example, the `suggest` tool guidance is injected only after the model emits the string `"suggest"`.
 
-### Schema (verbatim)
+**Why it matters for this project:**
+- The review system prompt ([src/prompts/review.ts](src/prompts/review.ts)) is already large: file inventory, prior review state, tool schemas, behavioral rules. TTSR would defer tool-specific guidance (e.g., "when posting suggestions, always include rationale") until the tool is actually invoked, cutting prompt tokens for simple PRs.
+- Token cost per review scales with prompt length × PR complexity. For a PR that only needs one `comment` call, all the `suggest`-specific guidance is wasted context.
 
-```sql
-CREATE TABLE memories (
-  id         INTEGER PRIMARY KEY AUTOINCREMENT,
-  scope      TEXT NOT NULL DEFAULT 'project',  -- 'project' | 'user'
-  project    TEXT,                              -- cwd for project-scoped
-  category   TEXT NOT NULL,
-  title      TEXT NOT NULL,
-  content    TEXT NOT NULL,
-  tags       TEXT,
-  created_at TEXT DEFAULT (datetime('now')),
-  updated_at TEXT DEFAULT (datetime('now'))
-);
+**Why not now:**
+- Requires streaming-aware injection in the agent loop layer (`@mariozechner/pi-agent-core`). The current `agent.ts` / `agent-setup.ts` don't expose streaming intercepts.
+- Would need upstream changes to `pi-agent-core` or a fork/wrapper.
+- The ROI is modest for frontier models (which handle long prompts efficiently); the gain is larger for smaller/cheaper models.
 
-CREATE VIRTUAL TABLE memories_fts USING fts5(title, content, tags, content=memories);
-```
+**Alternatives considered:**
+- **Chunked tool descriptions:** Move verbose per-tool guidance from system prompt into the tool's `description` field. Tools already have descriptions; this is the simple version of TTSR — tool-specific text only enters context when the tool is listed, not when it's invoked. Already partially done.
+- **Shorter system prompt:** Prune guidance that repeats what tool descriptions already say. Low effort, immediate win, no infrastructure changes.
+- **Full TTSR:** Maximum token savings but high implementation cost.
 
-### Categories applicable to PR review learning
-
-| Category | Use for |
-|---|---|
-| `convention` | Team coding standards learned from reactions |
-| `preference` | Comment types the team wants suppressed or amplified |
-| `pattern` | Recurring anti-patterns the team cares about |
-| `lesson` | Notes from 👎 reactions with developer explanations |
-| `decision` | Architectural choices (avoid flagging X, always flag Y) |
-
-### Auto-injection model
-
-Before each agent turn:
-1. Load all `overview` memories (always present)
-2. FTS5 search memories relevant to current prompt
-3. Inject as `# Recalled Memories` context block, capped ~4KB
+**Recommended intermediate step:** Audit the system prompt for rules that duplicate tool description content and remove the duplication. This captures ~30–50% of TTSR's token savings with zero infrastructure changes.
 
 ---
 
-## 4. pi-memory — Markdown-based Memory
+### 3. Structured Code Review Findings (Priority-based Verdicts)
 
-**Decision: Skip in favor of click's structured SQLite.**
+**Decision: ALREADY IMPLEMENTED — no action needed**
 
-**Rationale:** pi-memory stores MEMORY.md + daily logs as plain Markdown. Good for human-readable notes, but FTS5 + structured queries are better for automated learning. The injection mechanism (MEMORY.md into every turn) is a useful pattern.
+oh-my-pi's reviewer uses priority-based findings with structured verdicts. Our `summary.ts` already defines:
+- `StructuredSummaryFinding` with `category`, `severity` (low/medium/high), `status` (new/resolved/still_open), `confidence` (0–5), `evidence[]`, `action`
+- `SummaryMode` (compact/standard/alert)
+- 8 categories (Bug, Security, Performance, Unused Code, Duplicated Code, Refactoring, Design, Documentation)
 
-**How to apply:** Borrow the `MEMORY.md`-in-every-turn injection pattern, but back it with SQLite instead of files.
-
----
-
-## 5. pi-kysely — Shared Database for pi Extensions
-
-**Decision: Skip for initial implementation, revisit if multi-extension needed.**
-
-**Rationale:** pi-kysely is a shared Kysely (SQLite/Postgres/MySQL) registry for pi extensions communicating via an event bus. The RBAC model (`extension__tablename` prefixes) is elegant but adds ceremony. For our use case, a single SQLite file owned by the copilot action is simpler.
-
-**Alternatives considered:** Turso (libSQL at the edge, works in Actions), Neon (serverless Postgres), Supabase.
+The one gap: no explicit **priority** field distinct from severity. Severity = how bad; priority = what to fix first (e.g., a low-severity security issue may have higher priority than a high-severity style issue). Could add `priority: "critical" | "high" | "medium" | "low"` to `StructuredSummaryFinding` but this is a refinement, not a gap.
 
 ---
 
-## 6. pi-action-runner — GitHub Action Reference Implementation
+### 4. Parallel Subagent Execution
 
-**Decision: Study architecture, selectively adopt patterns.**
+**Decision: INVESTIGATE — check current subagent.ts parallelism limits**
 
-**Rationale:** pi-action-runner is the closest existing implementation to what copilot-for-github does. It runs a pi agent on GitHub events, supports dora code intelligence, and handles PR review + inline comments + issue/discussion responses.
+oh-my-pi supports up to 100 background jobs with configurable concurrency. The project has [src/tools/subagent.ts](src/tools/subagent.ts). Need to verify whether parallel subagent invocations are currently serialized or truly parallel, and whether GitHub Actions resource limits constrain this.
 
-### Key differences from copilot-for-github
+**If currently serialized:** Add `Promise.all` dispatch for independent file analysis subagents. The review of `src/foo.ts` is independent of `src/bar.ts`; parallel dispatch would cut wall time proportionally.
 
-| Feature | pi-action-runner | copilot-for-github |
-|---|---|---|
-| Review trigger | `@pi review` mention only | Automatic on PR open + configurable |
-| Code intelligence | dora (SCIP graph) | File reads + git diff only |
-| Memory | None | None (yet) |
-| Config | action.yml inputs only | `.reviewerc` with rich schema |
-| Filters | None | Author/label/branch/keyword filters |
-| Incremental reviews | No | Yes (SHA tracking) |
-| Custom rules | Via system_prompt file | `.reviewerc` commands |
-
-### Dora skill integration pattern
-
-```typescript
-// pi-action-runner/src/agent.ts
-const doraSkill = loadDoraSkill({ workingDir });
-// skill = markdown instructions injected into system prompt
-// agent calls dora CLI as bash commands
-```
+**Alternatives:** Leave serialized. Review is already fast enough for most PRs; parallelism adds complexity and increases API rate limit exposure.
 
 ---
 
-## 7. The Core Problem: Stateless GitHub Actions
+### 5. LSP Integration
 
-The fundamental constraint: **GitHub Actions have no persistent process**. Every run is a fresh container. All persistence must be external.
+**Decision: SKIP**
 
-### Storage options evaluated
+oh-my-pi has 11 LSP operations across 40+ languages. This requires:
+- A running LSP server in the execution environment
+- The project's dependencies installed (for TypeScript LSP, needs `node_modules`)
+- Persistent process management
 
-| Option | Pros | Cons |
-|---|---|---|
-| **GitHub comment markers** (current) | Zero infra, already used for SHA tracking | Text-only, no querying |
-| **File committed to repo** (`LEARNED_RULES.md`) | Auditable, versionable, no external deps | Pollutes git history with bot commits |
-| **Dedicated git branch** (`refs/bot-data`) | Clean, no main branch clutter | Complex git ops in CI |
-| **GitHub Gist** (private) | Simple API, persistent, free | Single user's account, not repo-scoped |
-| **GitHub Actions cache** | Fast, built-in | Ephemeral (7-day TTL), no guarantee |
-| **SQLite in repo** | Structured queries | Binary in git is terrible |
-| **External DB (Turso/Neon/Supabase)** | Full SQL, proper persistence | Requires user to provision and manage credentials |
-| **GitHub Releases/Artifacts** | Persistent, API accessible | Not designed for this, awkward |
+GitHub Actions runners have the project checked out but not necessarily installed (depends on workflow config). The LSP server would need to start, index the project, then respond — adding 10–30s of startup latency per review.
 
-**Recommended decision: File committed to repo** for rules/preferences, **GitHub API reactions** as the learning signal.
-
-**Why:**
-- Reactions (👍/👎) on bot comments are already available via GitHub API — zero extra infrastructure
-- A committed file (e.g., `.reviewerc-learned.json` or a section in `.reviewerc`) is auditable and team-editable
-- No external credentials required — works with `GITHUB_TOKEN`
+**Alternative:** For TypeScript type errors, use `tsc --noEmit` as a subprocess tool. For linting, use `eslint`. These are lighter and more reliable in CI than LSP.
 
 ---
 
-## 8. Proposed Architecture: Lightweight Learning System
+### 6. Context Compaction
 
-### Learning signal: GitHub reactions on bot comments
+**Decision: ALREADY IMPLEMENTED**
 
-```typescript
-// Fetch reactions on the bot's previous review comments
-GET /repos/{owner}/{repo}/issues/comments/{comment_id}/reactions
-// +1 = 👍 (good comment, keep making these)
-// -1 = 👎 (unhelpful, suppress this type)
-```
-
-The reaction + the comment text gives enough signal to extract a category of preference.
-
-### Storage: `.github/copilot-learned.json` (committed by bot)
-
-```json
-{
-  "version": 1,
-  "suppressions": [
-    { "pattern": "missing semicolons", "score": -3, "lastSeen": "2026-03-10" }
-  ],
-  "amplifications": [
-    { "pattern": "error handling in async functions", "score": +5, "lastSeen": "2026-03-15" }
-  ],
-  "teamContext": [
-    { "note": "We use our own auth middleware, don't flag JWT directly", "addedAt": "2026-03-12" }
-  ]
-}
-```
-
-### Flow per PR review run
-
-```
-1. Fetch previous bot comments + their reactions
-2. Load .github/copilot-learned.json (if exists)
-3. Update scores from new reactions since last run
-4. Inject learned suppressions + amplifications into system prompt
-5. Run review as normal
-6. Commit updated .github/copilot-learned.json (only if scores changed)
-```
-
-### System prompt injection
-
-```
-## Learned Team Preferences
-
-The following is based on team reactions to previous reviews:
-
-SUPPRESS (team has 👎'd these repeatedly):
-- Comments about missing semicolons (score: -3)
-
-AMPLIFY (team has 👍'd these repeatedly):
-- Error handling in async functions (score: +5)
-
-CONTEXT NOTES (added by team):
-- We use our own auth middleware; don't flag direct JWT usage.
-```
-
-### New ToolCategory needed
-
-```typescript
-"github.reactions.read"  // read reactions on bot comments
-"repo.write"             // already exists — commit learned file
-```
-
-### Confirmed: No reactions API currently used
-
-The codebase makes zero calls to GitHub's reactions endpoint. The gap is confirmed and clean to add.
-
-### Precise extension points in current codebase
-
-| What | Where | How to extend |
-|---|---|---|
-| Fetch reactions | `src/app/pr-data.ts` — `fetchExistingComments()` | Add reaction fetch alongside comment fetch |
-| Marker parsing | `src/app/last-review.ts` | Add `findLearnedPrefs()` following same `<!-- sri:key:value -->` pattern |
-| Inject into prompt | `src/prompts/review.ts` | Add learned prefs section to system prompt builder |
-| Store updated prefs | `src/tools/review.ts` — `ensureSummaryFooter()` | Encode compact prefs in a new `<!-- sri:learned-prefs:{json} -->` marker, OR commit `.github/copilot-learned.json` via `repo.write` tool |
-| New tool category | `src/tools/categories.ts` | Add `"github.reactions.read"` to `TOOL_CATEGORY_BY_NAME` |
+[src/agent/context-compaction.ts](src/agent/context-compaction.ts) exists. No action needed.
 
 ---
 
-## 9. Confidence Scoring (Low-effort gap)
+### 7. Multi-provider Web Search
 
-Greptile includes a confidence score (0–5) per finding. This is purely a prompt-level addition:
+**Decision: LOW PRIORITY**
 
-```
-For each finding, rate your confidence that this is a real issue (0–5):
-5 = certain bug/security issue
-4 = very likely problem
-3 = probable issue
-2 = possible concern
-1 = minor style preference
-0 = speculative
-
-Include the score in findings output.
-```
-
-The `post_summary` structured output already has `verdict` — add `confidence` field.
+oh-my-pi supports 9 providers. Current [src/tools/web-search.ts](src/tools/web-search.ts) uses Gemini. The review use case rarely needs web search (it's about the code in the PR, not external docs). Adding providers would be a quality-of-life improvement for rare cases; not worth the complexity now.
 
 ---
 
-## 10. Open Questions / NEEDS CLARIFICATION
+## Implementation Priority
 
-1. **Reaction fetching scope**: Do we fetch reactions on ALL previous bot comments or only the most recent review batch? Fetching all is more complete but slower.
-
-2. **Commit strategy for learned file**: Should the bot commit `.github/copilot-learned.json` after every run (noisy), or only when net score changes exceed a threshold?
-
-3. **Bot identity for reactions**: Reactions are by user. If multiple team members react, do we aggregate all or only count repo members/collaborators?
-
-4. **dora integration feasibility**: dora requires SCIP indexer install (~1-2 min on cold run). Is this acceptable for the action's runtime? Warm runs (same commit SHA) skip indexing.
-
-5. **Learned file ownership**: Should `.github/copilot-learned.json` be gitignored (ephemeral) or committed (auditable)? Committed is auditable but creates bot commits on main.
-
----
-
-## Summary: Recommended Next Steps (Priority Order)
-
-| Priority | Feature | Effort | Infrastructure |
+| Feature | Priority | Effort | Impact |
 |---|---|---|---|
-| 1 | **Reaction-based learning signal** — fetch 👍/👎 on bot comments | Low | None (GitHub API) |
-| 2 | **Confidence scoring** — add 0–5 score to findings prompt | Very low | None |
-| 3 | **dora integration** — SCIP-based cross-file analysis | Medium | dora CLI in Action |
-| 4 | **Learned preferences file** — persist suppressions/amplifications | Medium | `repo.write` + commit |
-| 5 | **click-style SQLite memory** — full structured memory | High | External DB or Gist |
+| Hashline read annotations | **High** | Medium | High — catches stale anchors, improves weaker model accuracy |
+| Hashline suggest verification | **High** | Low | High — prevents wrong-line suggestions silently |
+| System prompt pruning (TTSR lite) | **Medium** | Low | Medium — immediate token savings, no infra changes |
+| Parallel subagents | Low | Low | Low — review fast enough today |
+| TTSR full | Backlog | High | Medium — needs upstream infra |
+| LSP integration | Skip | Very High | Low in CI context |
+
+---
+
+## Resolved Decisions
+
+| Question | Decision | Rationale |
+|---|---|---|
+| Adopt hashline? | Yes, in `read` tool | Highest leverage change; additive to existing output; direct verification benefit |
+| Hash function | CRC32 → 4-char hex | Fast, Bun-native (`Bun.CryptoHasher`), low collision rate for file sizes seen in PRs |
+| Default on or opt-in? | Opt-in via `.reviewerc` `review.experimental.hashlinesEnabled` | Operator controls it, not the model. Avoids annotation noise for users who don't need it; can promote to default later |
+| Full TTSR? | No now | Requires agent framework changes upstream |
+| LSP? | No | CI environment constraint |
+| Parallel subagents? | Investigate first | Verify if already parallel before adding complexity |

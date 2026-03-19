@@ -107,6 +107,7 @@ export function readConfig(): ActionConfig {
     experimentalPrExplainerInput !== undefined
       ? experimentalPrExplainerInput.toLowerCase() === "true"
       : reviewerc?.review?.experimental?.prExplainer ?? false;
+  const hashlinesEnabled = reviewerc?.review?.experimental?.hashlinesEnabled ?? false;
 
   if (!apiKeyInput && provider !== "google-vertex") {
     throw new Error("api-key is required for non-Vertex providers. For Vertex AI, api-key is optional (ADC or key).");
@@ -137,6 +138,7 @@ export function readConfig(): ActionConfig {
     temperature,
     allowPrToolsInReview: allowPrTools,
     experimentalPrExplainer,
+    hashlinesEnabled,
     dora,
     contextFile: contextFileInput ?? reviewDefaults.contextFile,
   };

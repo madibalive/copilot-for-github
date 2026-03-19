@@ -38,6 +38,9 @@ review:
     # Experimental PR explainer: one top-level review guide + one explainer comment per file.
     # Equivalent action input: experimental-pr-explainer: true
     prExplainer: true
+    # Hashline reads: annotate read output as `lineNum:hash|content` for stable line anchors.
+    # Improves suggestion accuracy on weaker models. No action input equivalent.
+    # hashlinesEnabled: true
 
 schedule:
   enabled: true

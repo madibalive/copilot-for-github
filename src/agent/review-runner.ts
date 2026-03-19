@@ -1,6 +1,6 @@
 import { calculateCost, streamSimple, getModel } from "@mariozechner/pi-ai";
 import type { Usage } from "@mariozechner/pi-ai";
-import { buildLearnedPrefsPrompt, buildSystemPrompt, buildTeamContextBlock, buildUserPrompt } from "../prompts/review.js";
+import { buildLearnedPrefsPrompt, buildSystemPrompt, buildTeamContextBlock, buildUserPrompt, HASHLINE_SYSTEM_NOTE } from "../prompts/review.js";
 import { createGithubTools, createReadOnlyTools, createReviewTools, createSubagentTool, createWebSearchTool, RateLimitError } from "../tools/index.js";
 import { createDoraTools } from "../tools/dora.js";
 import { filterToolsByAllowlist } from "../tools/categories.js";
@@ -138,7 +138,7 @@ export async function runReview(input: ReviewRunInput): Promise<void> {
   const summaryRiskHints = detectSummaryRiskHints(filteredFiles);
   log(`filtered files: ${filteredFiles.length}`);
 
-  const readTools = createReadOnlyTools(config.repoRoot);
+  const readTools = createReadOnlyTools(config.repoRoot, { hashlines: config.hashlinesEnabled });
   const githubTools = createGithubTools({
     octokit,
     owner: context.owner,
@@ -158,6 +158,8 @@ export async function runReview(input: ReviewRunInput): Promise<void> {
     getBilling: () => summaryState.billing,
     existingComments: input.existingComments,
     reviewThreads: input.reviewThreads,
+    repoRoot: config.repoRoot,
+    hashlinesEnabled: config.hashlinesEnabled,
     onSummaryPosted: () => {
       summaryState.posted = true;
     },
@@ -203,6 +205,7 @@ export async function runReview(input: ReviewRunInput): Promise<void> {
   let systemPrompt = buildSystemPrompt(tools.map((tool) => tool.name));
   if (teamContextBlock) systemPrompt += `\n\n${teamContextBlock}`;
   if (learnedPrefsBlock) systemPrompt += `\n\n${learnedPrefsBlock}`;
+  if (config.hashlinesEnabled) systemPrompt += `\n\n${HASHLINE_SYSTEM_NOTE}`;
 
   const { agent, model, effectiveThinkingLevel } = createAgentWithCompaction({
     config,

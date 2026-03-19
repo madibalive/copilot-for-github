@@ -51,6 +51,12 @@ const TOOL_DOCS: Record<string, string> = {
   dora_symbol: "Use dora tools to query the SCIP code index for cross-file analysis. `dora_symbol` looks up a symbol; `dora_refs` finds references; `dora_deps`/`dora_rdeps` trace call-graph edges; `dora_smells` detects code smells; `dora_cycles` finds circular dependencies.",
 };
 
+export const HASHLINE_SYSTEM_NOTE = `## Hashline File Format
+
+File reads use hashline format: each line is prefixed as \`lineNum:hash|content\` where \`hash\` is a 4-char hex CRC32 of the line bytes.
+
+When posting a \`suggest\` call, include the \`content_hash\` field with the hash from the line you are targeting. This allows the tool to verify the line has not changed since you read it and prevents wrong-line suggestions.`;
+
 export function buildSystemPrompt(toolNames: string[] = []): string {
   const toolSet = new Set(toolNames);
   const hasTool = (name: string) => toolSet.has(name);
@@ -140,9 +146,7 @@ Never re-post feedback that a prior thread already covers. If the verdict change
   } else {
     workflowSteps.push("Review files: read full file content for context. Post inline comments/suggestions for specific issues.");
   }
-  if (can.validateMermaid) {
-    workflowSteps.push("Validate Mermaid diagrams with validate_mermaid before posting.");
-  }
+  // validate_mermaid usage covered by TOOL_DOCS entry — no separate workflow step needed
   // Thread management — only emitted when followUp provides the classification
   // table. Without it, "per the classification above" would be a dangling ref.
   if (can.followUp && can.manageThreads) {
@@ -159,8 +163,8 @@ Never re-post feedback that a prior thread already covers. If the verdict change
   if (can.setSummaryMode) {
     workflowSteps.push("Use set_summary_mode only when evidence shows higher risk than the default summary mode.");
   }
-  if (can.postSummary) workflowSteps.push("Post summary exactly once.");
-  if (can.terminate) workflowSteps.push("Call terminate, then stop.");
+  if (can.postSummary) workflowSteps.push("Post summary.");
+  // terminate usage covered by TOOL_DOCS entry — no separate workflow step needed
 
   const workflowSection = workflowSteps.length
     ? `\n# Workflow\n${workflowSteps.map((step, i) => `${i + 1}. ${step}`).join("\n")}\n`

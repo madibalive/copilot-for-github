@@ -1,10 +1,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import fg from "fast-glob";
 import { Type } from "@sinclair/typebox";
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 
 const DEFAULT_EXCLUDES = ["**/.git/**", "**/node_modules/**", "**/dist/**", "**/coverage/**"];
+
+function hashLine(lineNum: number, content: string): string {
+  const hex = createHash("md5").update(content).digest("hex").slice(0, 4);
+  return `${lineNum}:${hex}|${content}`;
+}
 
 function ensureInsideRoot(root: string, target: string): string {
   const resolvedRoot = path.resolve(root);
@@ -25,7 +31,7 @@ function looksBinary(buffer: Buffer): boolean {
   return sample.includes(0);
 }
 
-export function createReadOnlyTools(repoRoot: string): AgentTool<any>[] {
+export function createReadOnlyTools(repoRoot: string, opts: { hashlines?: boolean } = {}): AgentTool<any>[] {
   const readTool: AgentTool<typeof ReadSchema, { path: string; truncated: boolean }> = {
     name: "read",
     label: "Read file",
@@ -45,7 +51,10 @@ export function createReadOnlyTools(repoRoot: string): AgentTool<any>[] {
       const start = Math.max(1, params.start_line ?? 1);
       const end = Math.min(lines.length, params.end_line ?? lines.length);
       const slice = lines.slice(start - 1, end);
-      const joined = slice.join("\n");
+      const annotated = opts.hashlines
+        ? slice.map((line, i) => hashLine(start + i, line))
+        : slice;
+      const joined = annotated.join("\n");
       const maxChars = params.max_chars ?? 20000;
       const truncated = joined.length > maxChars;
       const isPartial = start !== 1 || end !== lines.length;
