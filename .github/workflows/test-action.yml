@@ -1,0 +1,29 @@
+name: Test Action
+
+on:
+  workflow_dispatch:
+    inputs:
+      provider:
+        description: 'LLM provider'
+        required: true
+        default: 'anthropic'
+      model:
+        description: 'Model to use'
+        required: true
+        default: 'claude-sonnet-4'
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: madibalive/copilot-for-github@main
+        with:
+          provider: ${{ github.event.inputs.provider }}
+          api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          model: ${{ github.event.inputs.model }}
+          reasoning: medium
+          debug: true
