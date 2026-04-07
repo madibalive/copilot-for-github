@@ -11,16 +11,19 @@ on:
   pull_request:
     types: [opened, synchronize]
 
+permissions:
+  contents: read
+  pull-requests: write
+
 jobs:
   review:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: ghcr.io/yourname/copilot-for-github:latest
+      - uses: madibalive/copilot-for-github@v0.3.0
         with:
-          provider: openrouter
-          api-key: ${{ secrets.OPENROUTER_KEY }}
-          model: anthropic/claude-sonnet-4
+          provider: anthropic
+          api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          model: claude-sonnet-4
 ```
 
 ## Inputs
@@ -350,7 +353,7 @@ jobs:
 - Manual `workflow_dispatch` runs use the same schedule flow and `schedule.runs[GITHUB_JOB]` mapping.
 - Scheduled PR descriptions include the model + billing footer when the agent calls `push_pr`.
 
-Minimal workflow (implicit token):
+Minimal workflow:
 
 ```yaml
 permissions:
@@ -362,13 +365,11 @@ jobs:
   review:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: ghcr.io/madibalive/copilot-for-github:latest
+      - uses: madibalive/copilot-for-github@v0.3.0
         with:
           provider: google
           api-key: ${{ secrets.GEMINI_API_KEY }}
           model: gemini-3-pro-preview
-          reasoning: medium
 ```
 
 ## Gemini 3 Pro Recommendations
